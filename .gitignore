@@ -1,0 +1,8 @@
+km/
+.ipynb_checkpoints/
+*.pkl
+*.ipynb
+__pycache__/
+src/get_nearest_hamming_dist_uint*
+src/hamming_dist_vec_uint*
+src/hamming_dist_mat_uint*
