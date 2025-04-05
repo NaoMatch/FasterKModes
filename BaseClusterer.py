@@ -7,9 +7,13 @@ from typing import Tuple
 from numpy.typing import NDArray
 import inspect
 
-from src.generate_code import generate_get_nearest_dist_code, generate_dist_vec_code, generate_dist_mat_code
-from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_dist_code, generate_naive_dist_vec_code
+from src.generate_code import generate_get_nearest_cat_dist_code, generate_dist_vec_code, generate_dist_mat_code
+from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_cat_dist_code, generate_naive_dist_vec_code
 from src.utils_kmodes import return_cat_argtypes
+from config import VALID_INIT_METHODS
+from config import VALID_CATEGORICAL_MEASURES
+from config import VALID_NUMERICAL_MEASURES
+
 
 class BaseClusterer:
     def __init__(
@@ -82,58 +86,53 @@ class BaseClusterer:
             use_simd, 
             max_tol):
         # n_clusters: 整数でかつ2以上
-        if not isinstance(n_clusters, int) or n_clusters < 2:
+        if (not isinstance(n_clusters, int)) or (n_clusters < 2):
             raise ValueError(f"n_clusters must be an integer >= 2, but got {n_clusters} (type: {type(n_clusters)}).")
         
         # max_iter: 整数でかつ1以上
-        if not isinstance(max_iter, int) or max_iter < 1:
+        if (not isinstance(max_iter, int)) or (max_iter < 1):
             raise ValueError(f"max_iter must be an integer >= 1, but got {max_iter} (type: {type(max_iter)}).")
         
         # min_n_moves: 整数でかつ0以上
-        if not isinstance(min_n_moves, int) or min_n_moves < 0:
+        if (not isinstance(min_n_moves, int)) or (min_n_moves < 0):
             raise ValueError(f"min_n_moves must be an integer >= 0, but got {min_n_moves} (type: {type(min_n_moves)}).")
         
         # n_init: 整数でかつ1以上
-        if not isinstance(n_init, int) or n_init < 1:
+        if (not isinstance(n_init, int)) or (n_init < 1):
             raise ValueError(f"n_init must be an integer >= 1, but got {n_init} (type: {type(n_init)}).")
         
         # random_state: np.random.seed() が受け取れるかチェック
-        if random_state is not None and not isinstance(random_state, int):
-            raise ValueError(f"random_state must be either None or an integer, but got {random_state} (type: {type(random_state)}).")
+        if random_state is not None:
+            if not isinstance(random_state, int):
+                raise ValueError(f"random_state must be either None or an integer, but got {random_state} (type: {type(random_state)}).")
+            if random_state < 0:
+                raise ValueError("random_state must be a non-negative integer.")
+            if random_state > 2**32 - 1:
+                raise ValueError("random_state must be less than or equal to 2**32 - 1.")        
         
-        # init: 文字列の場合は VALID_INIT_METHODS、または callable で引数が ["X", "n_clusters"]
-        VALID_INIT_METHODS = ["random", "k-means++", "huang", "cao"]
-        if isinstance(init, str):
-            if init not in VALID_INIT_METHODS:
-                raise ValueError(f"init must be one of {VALID_INIT_METHODS}, but got '{init}'.")
-        elif callable(init):
-            sig = inspect.signature(init)
-            if list(sig.parameters.keys()) != ["X", "n_clusters"]:
-                raise ValueError(f"Custom init function must accept exactly two arguments: 'X' and 'n_clusters'. Got parameters: {list(sig.parameters.keys())}")
-        else:
-            raise ValueError(f"init must be a string or a callable function, but got {init} (type: {type(init)}).")
-        
-        # categorical_measure: 文字列なら "hamming"、または callable で引数が ["Xcat", "Ccat"]
-        VALID_CATEGORICAL_MEASURES = ["hamming"]
+        # categorical_measure: 文字列なら "hamming"、または callable で引数が ["x_cat", "x_cat"]
         if isinstance(categorical_measure, str):
             if categorical_measure not in VALID_CATEGORICAL_MEASURES:
                 raise ValueError(f"categorical_measure must be one of {VALID_CATEGORICAL_MEASURES}, but got '{categorical_measure}'.")
         elif callable(categorical_measure):
+            # 引数のチェック
             sig = inspect.signature(categorical_measure)
-            if list(sig.parameters.keys()) != ["Xcat", "Ccat"]:
-                raise ValueError(f"Custom categorical_measure function must accept exactly two arguments: 'Xcat' and 'Ccat'. Got parameters: {list(sig.parameters.keys())}")
+            if list(sig.parameters.keys()) != ["x_cat", "c_cat"]:
+                raise ValueError(f"Custom categorical_measure function must accept exactly two arguments: 'x_cat' and 'c_cat'. Got parameters: {list(sig.parameters.keys())}")
+            # 戻り値のチェックはここでは実施しない。fit以降に実施する
         else:
             raise ValueError(f"categorical_measure must be a string from {VALID_CATEGORICAL_MEASURES} or a callable function, but got {categorical_measure} (type: {type(categorical_measure)}).")
         
-        # numerical_measure: 文字列なら "euclidean"、または callable で引数が ["Xnum", "Cnum"]
-        VALID_NUMERICAL_MEASURES = ["euclidean"]
+        # numerical_measure: 文字列なら "euclidean"、または callable で引数が ["x_num", "c_num"]
         if isinstance(numerical_measure, str):
             if numerical_measure not in VALID_NUMERICAL_MEASURES:
                 raise ValueError(f"numerical_measure must be one of {VALID_NUMERICAL_MEASURES}, but got '{numerical_measure}'.")
         elif callable(numerical_measure):
+            # 引数のチェック
             sig = inspect.signature(numerical_measure)
-            if list(sig.parameters.keys()) != ["Xnum", "Cnum"]:
-                raise ValueError(f"Custom numerical_measure function must accept exactly two arguments: 'Xnum' and 'Cnum'. Got parameters: {list(sig.parameters.keys())}")
+            if list(sig.parameters.keys()) != ["x_num", "c_num"]:
+                raise ValueError(f"Custom numerical_measure function must accept exactly two arguments: 'x_num' and 'c_num'. Got parameters: {list(sig.parameters.keys())}")
+            # 戻り値のチェックはここでは実施しない。fit以降に実施する
         else:
             raise ValueError(f"numerical_measure must be a string from {VALID_NUMERICAL_MEASURES} or a callable function, but got {numerical_measure} (type: {type(numerical_measure)}).")
         
@@ -185,18 +184,33 @@ class BaseClusterer:
                 print(result.stderr)
 
 
-    def _generate_compile_load_get_nearest_dist(self):
-        if not os.path.exists(self.fn_get_nearest_dist):
+    def _generate_compile_load_get_nearest_cat_dist(self):
+        if callable(self.categorical_measure):
+            def get_nearest_cat_dist(Xcat, N, n_cat_cols, centroid_vec, dist_vec, n_jobs):
+                for i in range(N):
+                    dist = self.categorical_measure(Xcat[i,:], centroid_vec)
+                    dist_vec[i] = np.min([dist_vec[i], dist])
+            self.get_nearest_cat_dist = get_nearest_cat_dist
+            return
+        if not os.path.exists(self.fn_get_nearest_cat_dist):
             if (self.n_cat_cols>=32) & (self.use_simd):
-                generate_get_nearest_dist_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_get_nearest_dist)
+                generate_get_nearest_cat_dist_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_get_nearest_cat_dist)
             else:
-                generate_naive_get_nearest_dist_code(self.input_cat_dtype, self.n_cat_cols, self.fn_get_nearest_dist)
-        self._compile_lib(fn=self.fn_get_nearest_dist)
-        self.lib_get_nearest_dist = ctypes.CDLL(f"./src/{self.fn_get_nearest_dist}.so")
-        self.lib_get_nearest_dist.get_nearest_dist.argtypes = self.arg_dist_vec
-        self.get_nearest_dist = self.lib_get_nearest_dist.get_nearest_dist
+                generate_naive_get_nearest_cat_dist_code(self.input_cat_dtype, self.n_cat_cols, self.fn_get_nearest_cat_dist)
+        self._compile_lib(fn=self.fn_get_nearest_cat_dist)
+        self.lib_get_nearest_cat_dist = ctypes.CDLL(f"./src/{self.fn_get_nearest_cat_dist}.so")
+        self.lib_get_nearest_cat_dist.get_nearest_cat_dist.argtypes = self.arg_dist_vec
+        self.get_nearest_cat_dist = self.lib_get_nearest_cat_dist.get_nearest_cat_dist
 
     def _generate_compile_load_dist_vec(self):
+        if callable(self.categorical_measure):
+            def compute_cat_dist_vec(Xcat, N, n_cat_cols, centroid_vec, dist_vec, n_jobs):
+                for i in range(N):
+                    dist = self.categorical_measure(Xcat[i,:], centroid_vec)
+                    dist_vec[i] = dist
+            self.compute_cat_dist_vec = compute_cat_dist_vec
+            return
+        
         if not os.path.exists(self.fn_dist_vec):
             if (self.n_cat_cols>=32) & (self.use_simd):
                 generate_dist_vec_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_vec)
@@ -204,24 +218,34 @@ class BaseClusterer:
                 generate_naive_dist_vec_code(self.input_cat_dtype, self.n_cat_cols, self.fn_dist_vec)
         self._compile_lib(fn=self.fn_dist_vec)
         self.lib_dist_vec = ctypes.CDLL(f"./src/{self.fn_dist_vec}.so")
-        self.lib_dist_vec.compute_dist_vec.argtypes = self.arg_dist_vec
-        self.compute_dist_vec = self.lib_dist_vec.compute_dist_vec
+        self.lib_dist_vec.compute_cat_dist_vec.argtypes = self.arg_dist_vec
+        self.compute_cat_dist_vec = self.lib_dist_vec.compute_cat_dist_vec
 
     def _generate_compile_load_dist_mat(self):
-        if not os.path.exists(self.fn_dist_mat):
-            if (self.n_cat_cols>=32) & (self.use_simd):
-                generate_dist_mat_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_mat)
-            else:
-                generate_naive_dist_mat_code(self.input_cat_dtype, self.n_cat_cols, self.fn_dist_mat)
-        self._compile_lib(fn=self.fn_dist_mat)
-        self.lib_dist_mat = ctypes.CDLL(f"./src/{self.fn_dist_mat}.so")
-        self.lib_dist_mat.compute_dist_mat.argtypes = self.arg_dist_mat
-        self.compute_dist_mat = self.lib_dist_mat.compute_dist_mat
+        # --------------------------------------------------------------------------------------------
+        # Categorical Measure
+        if callable(self.categorical_measure):
+            def compute_cat_dist_mat(Xcat, N, n_cat_cols, C, n_clusters, dist_mat, n_jobs):
+                for i in range(N):
+                    for j in range(n_clusters):                       
+                        dist = self.categorical_measure(Xcat[i,:], C[j,:])
+                        dist_mat[i,j] = dist
+            self.compute_cat_dist_mat = compute_cat_dist_mat
+        else:
+            if not os.path.exists(self.fn_dist_mat):
+                if (self.n_cat_cols>=32) & (self.use_simd):
+                    generate_dist_mat_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_mat)
+                else:
+                    generate_naive_dist_mat_code(self.input_cat_dtype, self.n_cat_cols, self.fn_dist_mat)
+            self._compile_lib(fn=self.fn_dist_mat)
+            self.lib_dist_mat = ctypes.CDLL(f"./src/{self.fn_dist_mat}.so")
+            self.lib_dist_mat.compute_cat_dist_mat.argtypes = self.arg_dist_mat
+            self.compute_cat_dist_mat = self.lib_dist_mat.compute_cat_dist_mat
 
     def _compute_distance_vector(self, Xcat: np.ndarray, c: np.ndarray):
         N = len(Xcat)
         dist_vec = np.zeros(N, dtype=np.int32)
-        self.compute_dist_vec(Xcat, N, self.n_cat_cols, c, dist_vec, self.n_jobs)
+        self.compute_cat_dist_vec(Xcat, N, self.n_cat_cols, c, dist_vec, self.n_jobs)
         return dist_vec
 
     def _compute_density_matrix(self, Xcat: np.ndarray):
@@ -234,3 +258,6 @@ class BaseClusterer:
 
         density_matrix = (count_matrix[0, :, :] / N).astype(np.float32)
         return density_matrix
+
+    # def _common_validate_train_X(self, X):
+
