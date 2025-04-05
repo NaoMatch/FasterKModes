@@ -7,9 +7,10 @@ from typing import Tuple
 from numpy.typing import NDArray
 import inspect
 
-from src.generate_code import generate_get_nearest_dist_code, generate_dist_vec_code, generate_dist_mat_code
-from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_dist_code, generate_naive_dist_vec_code
+from src.generate_code import generate_get_nearest_cat_dist_code, generate_dist_vec_code, generate_dist_mat_code
+from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_cat_dist_code, generate_naive_dist_vec_code
 from src.utils_kmodes import return_cat_argtypes
+from config import VALID_INIT_METHODS
 
 from BaseClusterer import BaseClusterer
 
@@ -42,11 +43,24 @@ class FasterKModes(BaseClusterer):
             numerical_measure="euclidean", # <- dummy
             n_jobs=n_jobs, 
             print_log=print_log, 
-            gamma=1.0, # <- dummy
+            gamma=1.0,                     # <- dummy
             recompile=recompile, 
             use_simd=use_simd, 
             max_tol=max_tol
         )
+
+        # init: 文字列の場合は VALID_INIT_METHODS、または callable で引数が ["X", "n_clusters"]
+        if isinstance(init, str):
+            if init not in VALID_INIT_METHODS:
+                raise ValueError(f"init must be one of {VALID_INIT_METHODS}, but got '{init}'.")
+        elif callable(init):
+             # 引数のチェック
+            sig = inspect.signature(init)
+            if list(sig.parameters.keys()) != ["X", "n_clusters"]:
+                raise ValueError(f"Custom init function must accept exactly two arguments: 'X' and 'n_clusters'. Got parameters: {list(sig.parameters.keys())}")
+            # 戻り値のチェックはここでは実施しない。fit以降に実施する
+        else:
+            raise ValueError(f"init must be a string or a callable function, but got {init} (type: {type(init)}).")
 
     def __setstate__(self, state):
         self.is_loaded = True
@@ -57,7 +71,7 @@ class FasterKModes(BaseClusterer):
 
         self._compile_lib(fn="common_funcs")
         self.lib = ctypes.CDLL("./src/common_funcs.so")
-        self._generate_compile_load_get_nearest_dist()
+        self._generate_compile_load_get_nearest_cat_dist()
         self._generate_compile_load_dist_vec()
         self._generate_compile_load_dist_mat()
 
@@ -69,13 +83,13 @@ class FasterKModes(BaseClusterer):
         del state["arg_dist_x_dens"]
         del state["arg_matrix_counter"]
         del state["arg_sample_density"]
-        del state["compute_dist_mat"]
+        del state["compute_cat_dist_mat"]
         del state["compute_dist_vec"]
-        del state["get_nearest_dist"]
+        del state["get_nearest_cat_dist"]
         del state["lib"]
         del state["lib_dist_mat"]
         del state["lib_dist_vec"]
-        del state["lib_get_nearest_dist"]
+        del state["lib_get_nearest_cat_dist"]
         del state["matrix_counter"]
         del state["sample_density"]
         return state
@@ -84,7 +98,7 @@ class FasterKModes(BaseClusterer):
     def __compute_distance_matrix(self, Xcat: np.ndarray):
         N = len(Xcat)
         dist_mat = np.zeros((N, self.n_clusters), dtype=np.int32, order="C")
-        self.compute_dist_mat(Xcat, N, self.n_cat_cols, self.C, self.n_clusters, dist_mat, self.n_jobs)
+        self.compute_cat_dist_mat(Xcat, N, self.n_cat_cols, self.C, self.n_clusters, dist_mat, self.n_jobs)
         return dist_mat
 
     def __predict_centroid_indices(self, Xcat: np.ndarray, return_distance: bool =False):
@@ -113,7 +127,7 @@ class FasterKModes(BaseClusterer):
             rnd_idx = np.random.randint(0, len(Xcat))
             centroid_indices.append(rnd_idx)
             centroid_vec = Xcat[rnd_idx,:]
-            self.get_nearest_dist(Xcat, N, self.n_cat_cols, centroid_vec, dist_vec, self.n_jobs)
+            self.get_nearest_cat_dist(Xcat, N, self.n_cat_cols, centroid_vec, dist_vec, self.n_jobs)
 
             # Select 2nd - N-th Centroids
             for c in range(1, self.n_clusters):
@@ -121,7 +135,7 @@ class FasterKModes(BaseClusterer):
                 rnd_idx = np.random.choice(N, p=weights)
                 centroid_indices.append(rnd_idx)
                 centroid_vec = Xcat[rnd_idx,:]
-                self.get_nearest_dist(Xcat, N, self.n_cat_cols, centroid_vec, dist_vec, self.n_jobs)
+                self.get_nearest_cat_dist(Xcat, N, self.n_cat_cols, centroid_vec, dist_vec, self.n_jobs)
             self.C = Xcat[centroid_indices,:]
         elif self.init == "huang":
             self.C = np.zeros((self.n_clusters, self.n_cat_cols), dtype=Xcat.dtype)
@@ -135,7 +149,7 @@ class FasterKModes(BaseClusterer):
             # セントロイドを修正
             centroid_indices = []
             dist_mat = np.zeros((N, self.n_clusters), dtype=np.int32)
-            self.compute_dist_mat(Xcat, N, self.n_cat_cols, self.C, self.n_clusters, dist_mat, self.n_jobs)
+            self.compute_cat_dist_mat(Xcat, N, self.n_cat_cols, self.C, self.n_clusters, dist_mat, self.n_jobs)
             for k in range(self.n_clusters):
                 dist_vec = dist_mat[:,k]
                 ranking = np.argsort(dist_vec)
@@ -190,9 +204,9 @@ class FasterKModes(BaseClusterer):
             raise ValueError("self.C must be a 2-dimensional array.")
         if self.C.shape[1] != self.n_cat_cols:
             raise ValueError("self.C must have the same number of columns as the categorical features.")
-        if not np.issubdtype(self.C.dtype, np.integer):
-            raise ValueError(f"self.C must contain integer values, {np.uint8} or {np.uint16}, not {self.C.dtype}.")
-        if np.any(self.C < 0) or np.any(self.C >= Xcat[:, :].max() + 1):
+        if self.C.dtype not in [np.uint8, np.uint16]:
+            raise ValueError(f"self.C must be np.uint8 or np.uint16, not {self.C.dtype}.")
+        if np.any(self.C > Xcat[:, :].max()):
             raise ValueError("init_Ccat contains invalid values for categorical features.")
 
     def __update_centroids(self, Xcat: np.ndarray, old_centroid_inds: Array1D, new_centroid_inds: Array1D):
@@ -220,9 +234,9 @@ class FasterKModes(BaseClusterer):
                 self.C[c_ind,:] = np.random.randint(0, max_val+1, self.n_cat_cols)
 
     def __validate_train_X(self, X: np.ndarray, init_C: np.ndarray):
-        if init_C is not None and callable(self.init):
+        if (init_C is not None) and callable(self.init):
             raise ValueError("Cannot provide both a custom init function (init is callable) and init_C. Please specify one or the other.")
-
+        
         # Check if X is a numpy array
         if not isinstance(X, np.ndarray):
             raise ValueError(f"Error: X must be a numpy array. Current input type:{type(X)}")
@@ -266,7 +280,7 @@ class FasterKModes(BaseClusterer):
                         f"init_C dtype: {init_C.dtype}, X dtype: {X.dtype}")
 
             # Check if init_C's values are within the valid range of X
-            if np.any(init_C < 0) or np.any(init_C > X.max()):
+            if np.any(init_C > X.max()):
                 raise ValueError("Error: init_C contains values outside the range of X.")
 
             # Check if init_C has the correct number of rows (clusters)
@@ -322,8 +336,6 @@ class FasterKModes(BaseClusterer):
             raise ValueError(f"Error: X must have at least one row. Got {X.shape[0]} row(s).")
         
         # Check if X contains valid values for the trained model
-        if np.any(X < 0):
-            raise ValueError("Error: X contains negative values, which are not valid for categorical features.")
         if self.input_cat_dtype == "uint8":
             max_value = np.iinfo(np.uint8).max
         elif self.input_cat_dtype == "uint16":
@@ -331,13 +343,12 @@ class FasterKModes(BaseClusterer):
         else:
             raise ValueError(f"Error: Invalid input_cat_dtype ({self.input_cat_dtype}) in the model.")
         
-        if np.any(X > max_value):
-            raise ValueError(f"Error: X contains values exceeding the maximum allowed value for {self.input_cat_dtype} ({max_value}).")
-
     def __create_file_names(self):
+        if callable(self.categorical_measure):
+            return
         suffix = ""
         if (self.n_cat_cols >= 32) & (self.use_simd): suffix = "_SIMD"
-        self.fn_get_nearest_dist = f"get_nearest_{self.categorical_measure}_dist_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
+        self.fn_get_nearest_cat_dist = f"get_nearest_{self.categorical_measure}_dist_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
         self.fn_dist_mat = f"{self.categorical_measure}_dist_mat_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
         self.fn_dist_vec = f"{self.categorical_measure}_dist_vec_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
 
@@ -356,11 +367,12 @@ class FasterKModes(BaseClusterer):
             self.sample_density = self.lib.sample_density_uint16
 
     def fit(self, X: np.ndarray, init_C: np.ndarray =None):
+        np.random.seed(self.random_state)
         self.__validate_train_X(X, init_C)
         self.__select_common_funcs()
         self.__create_file_names()
 
-        self._generate_compile_load_get_nearest_dist()
+        self._generate_compile_load_get_nearest_cat_dist()
         self._generate_compile_load_dist_vec()
         self._generate_compile_load_dist_mat()
         Xcat = X.copy()
@@ -373,7 +385,6 @@ class FasterKModes(BaseClusterer):
         best_cluster = None
         fast_break = init_C is not None
         N = len(Xcat)
-        np.random.seed(self.random_state)
         for _ in range(self.n_init):
             s = datetime.datetime.now()
             self.__select_initial_centroids(Xcat, init_C)

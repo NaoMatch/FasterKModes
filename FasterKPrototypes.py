@@ -9,9 +9,10 @@ from typing import Tuple
 from numpy.typing import NDArray
 import inspect
 
-from src.generate_code import generate_get_nearest_dist_code, generate_dist_vec_code, generate_dist_mat_code
-from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_dist_code, generate_naive_dist_vec_code
+from src.generate_code import generate_get_nearest_cat_dist_code, generate_dist_vec_code, generate_dist_mat_code
+from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_cat_dist_code, generate_naive_dist_vec_code
 from src.utils_kmodes import return_cat_argtypes, return_num_argtypes
+from config import VALID_INIT_METHODS
 
 from BaseClusterer import BaseClusterer
 
@@ -52,6 +53,20 @@ class FasterKPrototypes(BaseClusterer):
             max_tol=max_tol
         )
 
+        # init: 文字列の場合は VALID_INIT_METHODS、または callable で引数が ["X", "n_clusters"]
+        if isinstance(init, str):
+            if init not in VALID_INIT_METHODS:
+                raise ValueError(f"init must be one of {VALID_INIT_METHODS}, but got '{init}'.")
+        elif callable(init):
+             # 引数のチェック
+            sig = inspect.signature(init)
+            if list(sig.parameters.keys()) != ["Xcat", "Xnum", "n_clusters"]:
+                raise ValueError(f"Custom init function must accept exactly two arguments: 'Xcat', 'Xnum', and 'n_clusters'. Got parameters: {list(sig.parameters.keys())}")
+            # 戻り値のチェックはここでは実施しない。fit以降に実施する
+        else:
+            raise ValueError(f"init must be a string or a callable function, but got {init} (type: {type(init)}).")
+
+
     def __setstate__(self, state):
         self.__dict__.update(state)
 
@@ -61,7 +76,7 @@ class FasterKPrototypes(BaseClusterer):
 
         self._compile_lib(fn="common_funcs")
         self.lib = ctypes.CDLL("./src/common_funcs.so")
-        self._generate_compile_load_get_nearest_dist()
+        self._generate_compile_load_get_nearest_cat_dist()
         self._generate_compile_load_dist_vec()
         self._generate_compile_load_dist_mat()
         if self.input_num_dtype == "double":
@@ -80,13 +95,13 @@ class FasterKPrototypes(BaseClusterer):
         del state["arg_matrix_accumulator"]
         del state["arg_matrix_counter"]
         del state["arg_sample_density"]
-        del state["compute_dist_mat"]
-        del state["compute_dist_vec"]
-        del state["get_nearest_dist"]
+        del state["compute_cat_dist_mat"]
+        del state["compute_cat_dist_vec"]
+        del state["get_nearest_cat_dist"]
         del state["lib"]
         del state["lib_dist_mat"]
         del state["lib_dist_vec"]
-        del state["lib_get_nearest_dist"]
+        del state["lib_get_nearest_cat_dist"]
         del state["matrix_accumulater"]
         del state["matrix_counter"]
         del state["sample_density"]
@@ -98,15 +113,23 @@ class FasterKPrototypes(BaseClusterer):
     def __compute_distance_matrix(self, Xcat: np.ndarray, Xnum: np.ndarray):
         N = len(Xcat)
         cat_dist_mat = np.zeros((N, self.n_clusters), dtype=np.int32, order="C")
-        self.compute_dist_mat(Xcat, N, self.n_cat_cols, self.Ccat, self.n_clusters, cat_dist_mat, self.n_jobs)
+        self.compute_cat_dist_mat(Xcat, N, self.n_cat_cols, self.Ccat, self.n_clusters, cat_dist_mat, self.n_jobs)
 
-        if self.__is_train:
-            num_dist_mat_ = (self.Xnum_sqsum + self.Cnum_sqsum).astype(self.ftype)
+        if callable(self.numerical_measure):
+            C = self.n_clusters
+            num_dist_mat = np.zeros((N, C), dtype=np.float32)
+            for i in range(N):
+                for j in range(self.n_clusters):
+                    num_dist_mat[i,j] = self.numerical_measure(Xnum[i,:], self.Cnum[j,:])
         else:
-            Xnum_sqsum = (Xnum*Xnum).sum(axis=1).reshape((-1, 1))
-            num_dist_mat_ = (Xnum_sqsum + self.Cnum_sqsum).astype(self.ftype)
+            if self.__is_train:
+                num_dist_mat_ = (self.Xnum_sqsum + self.Cnum_sqsum).astype(self.ftype)
+            else:
+                Xnum_sqsum = (Xnum*Xnum).sum(axis=1).reshape((-1, 1))
+                num_dist_mat_ = (Xnum_sqsum + self.Cnum_sqsum).astype(self.ftype)
 
-        num_dist_mat = self.gemm(alpha=-2.0, a=Xnum, b=self.Cnum, c=num_dist_mat_, beta=1.0, trans_b=True)
+            num_dist_mat = self.gemm(alpha=-2.0, a=Xnum, b=self.Cnum, c=num_dist_mat_, beta=1.0, trans_b=True)
+            num_dist_mat = np.sqrt(num_dist_mat.clip(min=0))
 
         return num_dist_mat + self.gamma*cat_dist_mat
     
@@ -145,12 +168,18 @@ class FasterKPrototypes(BaseClusterer):
             cat_centroid_vec = Xcat[rnd_idx,:]
             num_centroid_vec = Xnum[rnd_idx,:]
 
-            self.compute_dist_vec(Xcat, N, self.n_cat_cols, cat_centroid_vec, cat_dist_vec, self.n_jobs)
+            self.compute_cat_dist_vec(Xcat, N, self.n_cat_cols, cat_centroid_vec, cat_dist_vec, self.n_jobs)
             cat_dist_mat[:,0] = cat_dist_vec[:]
 
-            num_dist_vec = self.Xnum_sqsum + (num_centroid_vec*num_centroid_vec).sum()
-            num_dist_vec = self.gemv(alpha=-2.0, a=Xnum, x=num_centroid_vec, y=num_dist_vec, beta=1.0)
-            num_dist_mat[:,0] = num_dist_vec[:,0].clip(min=0)
+            if callable(self.numerical_measure):
+                num_dist_vec = np.zeros((N, 1))
+                for i in range(N):
+                    num_dist_vec[i,0] = self.numerical_measure(Xnum[i,:], num_centroid_vec)
+            else:
+                num_dist_vec = self.Xnum_sqsum + (num_centroid_vec*num_centroid_vec).sum()
+                num_dist_vec = self.gemv(alpha=-2.0, a=Xnum, x=num_centroid_vec, y=num_dist_vec, beta=1.0)
+                num_dist_vec = np.sqrt(num_dist_vec.clip(min=0))
+            num_dist_mat[:,0] = num_dist_vec[:,0]
 
             # Select 2nd - N-th Centroids
             for c in range(1, self.n_clusters):
@@ -161,12 +190,18 @@ class FasterKPrototypes(BaseClusterer):
                 cat_centroid_vec = Xcat[rnd_idx,:]
                 num_centroid_vec = Xnum[rnd_idx,:]
 
-                self.compute_dist_vec(Xcat, N, self.n_cat_cols, cat_centroid_vec, cat_dist_vec, self.n_jobs)
+                self.compute_cat_dist_vec(Xcat, N, self.n_cat_cols, cat_centroid_vec, cat_dist_vec, self.n_jobs)
                 cat_dist_mat[:,c] = cat_dist_vec[:]
 
-                num_dist_vec = self.Xnum_sqsum + (num_centroid_vec*num_centroid_vec).sum()
-                num_dist_vec = self.gemv(alpha=-2.0, a=Xnum, x=num_centroid_vec, y=num_dist_vec, beta=1.0)
-                num_dist_mat[:,c] = num_dist_vec[:,0].clip(min=0)
+                if callable(self.numerical_measure):
+                    num_dist_vec = np.zeros((N, 1))
+                    for i in range(N):
+                        num_dist_vec[i,0] = self.numerical_measure(Xnum[i,:], num_centroid_vec)
+                else:
+                    num_dist_vec = self.Xnum_sqsum + (num_centroid_vec*num_centroid_vec).sum()
+                    num_dist_vec = self.gemv(alpha=-2.0, a=Xnum, x=num_centroid_vec, y=num_dist_vec, beta=1.0)
+                    num_dist_vec = np.sqrt(num_dist_vec.clip(min=0))
+                num_dist_mat[:,c] = num_dist_vec[:,0]
             self.Ccat = Xcat[centroid_indices,:].astype(self.itype)
             self.Cnum = Xnum[centroid_indices,:].astype(self.ftype)
 
@@ -182,7 +217,7 @@ class FasterKPrototypes(BaseClusterer):
             # セントロイドを修正
             centroid_indices = []
             dist_mat = np.zeros((N, self.n_clusters), dtype=np.int32)
-            self.compute_dist_mat(Xcat, N, self.n_cat_cols, self.Ccat, self.n_clusters, dist_mat, self.n_jobs)
+            self.compute_cat_dist_mat(Xcat, N, self.n_cat_cols, self.Ccat, self.n_clusters, dist_mat, self.n_jobs)
             for k in range(self.n_clusters):
                 dist_vec = dist_mat[:,k]
                 ranking = np.argsort(dist_vec)
@@ -235,33 +270,42 @@ class FasterKPrototypes(BaseClusterer):
         self.Cnum_sqsum = np.sum(self.Cnum*self.Cnum, axis=1).reshape((1, -1))
 
     def __check_custom_init_method_output(self, Xcat, Xnum):
-        # Validate self.Ccat
+        # カスタム初期化関数の出力として返された「カテゴリ特徴量のセントロイド」の検証
         if not isinstance(self.Ccat, np.ndarray):
-            raise ValueError("self.Ccat must be a numpy ndarray.")
+            raise ValueError("Custom init function output: The categorical feature centroids must be a numpy ndarray.")
         if self.Ccat.ndim != 2:
-            raise ValueError("self.Ccat must be a 2-dimensional array.")
+            raise ValueError("Custom init function output: The categorical feature centroids must be a 2-dimensional array.")
         if self.Ccat.shape[1] != len(self.cat_feat_idxs):
-            raise ValueError("self.Ccat must have the same number of columns as the categorical features.")
-        if not np.issubdtype(self.Ccat.dtype, np.integer):
-            raise ValueError(f"self.C must contain integer values, {np.uint8} or {np.uint16}, not {self.Ccat.dtype}.")
-        if np.any(self.Ccat < 0) or np.any(self.Ccat >= Xcat[:, self.cat_feat_idxs].max() + 1):
-            raise ValueError("self.Ccat contains invalid values for categorical features.")
+            raise ValueError(f"Custom init function output: The categorical feature centroids must have {len(self.cat_feat_idxs)} columns, but got {self.Ccat.shape[1]}.")
+        if self.Ccat.dtype != self.itype:
+            raise ValueError(
+                    "Custom init function output: The dtype of categorical feature centroids does not match the expected type derived from X[:, categorical]'s maximum value. "
+                    "If the maximum value of X[:, categorical] is 255(65535) or below, uint8(uint16) is expected."
+                    f"Found categorical feature centroids dtype: {self.Ccat.dtype}, expected: {self.itype}."
+                    )
+        if np.any(self.Ccat < 0) or np.any(self.Ccat > Xcat[:, :].max()):
+            raise ValueError("Custom init function output: The categorical feature centroids contain invalid values for categorical features.")
 
-        # Validate self.Cnum
+        # カスタム初期化関数の出力として返された「数値特徴量のセントロイド」の検証
         if not isinstance(self.Cnum, np.ndarray):
-            raise ValueError("self.Cnum must be a numpy ndarray.")
+            raise ValueError("Custom init function output: The numerical feature centroids must be a numpy ndarray.")
         if self.Cnum.ndim != 2:
-            raise ValueError("self.Cnum must be a 2-dimensional array.")
+            raise ValueError("Custom init function output: The numerical feature centroids must be a 2-dimensional array.")
         if self.Cnum.shape[1] != len(self.num_feat_idxs):
-            raise ValueError("self.Cnum must have the same number of columns as the numerical features.")
-        if not np.issubdtype(self.Cnum.dtype, np.floating):
-            raise ValueError(f"self.C must contain float values, {np.float32} or {np.float64}, not {self.Cnum.dtype}.")
-
-        # Check consistency of self.Ccat and self.Cnum with n_clusters
+            raise ValueError(f"Custom init function output: The numerical feature centroids must have {len(self.num_feat_idxs)} columns, but got {self.Cnum.shape[1]}.")
+        if self.Cnum.dtype != self.ftype:
+            raise ValueError(
+                "Custom init function output: The numerical feature centroids must contain float values (np.float32 or np.float64)."
+                "If the maximum value of X[:, numerical] is less than or equal to np.finfo(np.float32).max, float32 is expected; "
+                "if it exceeds this threshold, float64 is expected. "
+                f"Found numerical feature centroids dtype: {self.Cnum.dtype}, expected: {self.ftype}."
+            )
+        
+        # カテゴリ特徴量と数値特徴量のセントロイド間の整合性の検証
         if self.Ccat.shape[0] != self.Cnum.shape[0]:
-            raise ValueError("self.Ccat and self.Cnum must have the same number of rows (centroids).")
+            raise ValueError("Custom init function output: The number of categorical feature centroids and numerical feature centroids must be the same.")
         if self.Ccat.shape[0] != self.n_clusters:
-            raise ValueError("The number of rows in self.Ccat and self.Cnum must match n_clusters.")
+            raise ValueError("Custom init function output: The number of centroids for categorical and numerical features must match n_clusters.")
 
     def __update_centroids(self, Xcat: np.ndarray, Xnum: np.ndarray, old_centroid_inds: Array1D, new_centroid_inds: Array1D):
         N = len(Xcat)
@@ -325,11 +369,23 @@ class FasterKPrototypes(BaseClusterer):
         """
         # Check if X is a numpy array
         if not isinstance(X, np.ndarray):
-            raise ValueError("X must be a numpy ndarray.")
+            raise ValueError(f"Error: X must be a numpy array. Current input type:{type(X)}")
+
+        # XにNaNが含まれていないかをチェック
+        if np.any(np.isnan(X)):
+            raise ValueError("Error: X must not contain NaN values.")
 
         # Check if X is a 2-dimensional array
         if X.ndim != 2:
-            raise ValueError("X must be a 2-dimensional array.")
+            raise ValueError("Error: X must be a 2D array. Current ndim: ")
+
+        # Check that self.cat_feat_idxs is a list
+        if not isinstance(categorical_feature_indices, list):
+            raise ValueError("Error: 'categorical' must be a list.")
+
+        # Check that all elements in self.cat_feat_idxs are integers
+        if not all(isinstance(x, int) for x in categorical_feature_indices):
+            raise ValueError("Error: All elements in 'categorical' must be integers.")
 
         self.n_cols = X.shape[1]
         self.cat_feat_idxs = sorted(deepcopy(categorical_feature_indices))
@@ -347,7 +403,11 @@ class FasterKPrototypes(BaseClusterer):
             max_value = np.iinfo(np.uint16).max
             if np.any(X[:, self.cat_feat_idxs] > max_value):
                 raise ValueError(f"Categorical features must not exceed {max_value} when dtype is float.")
-        
+
+        # Check that all elements are unique
+        if len(set(self.cat_feat_idxs)) != len(self.cat_feat_idxs):
+            raise ValueError("All elements in 'categorical' must be unique.")
+
         # Check if indices are within valid range
         if not all(0 <= idx < X.shape[1] for idx in self.cat_feat_idxs):
             raise ValueError("All indices must be within the range of X's column indices.")
@@ -371,10 +431,6 @@ class FasterKPrototypes(BaseClusterer):
             raise ValueError("No categorical features provided. Using sklearn.cluster.KMeans.")
         elif len(self.cat_feat_idxs) == X.shape[1]:
             raise ValueError("All features are categorical. Using FasterKModes.")
-        
-        # Validate init_Ccat
-        if (init_Ccat is None) != (init_Cnum is None):
-            raise ValueError("init_Ccat and init_Cnum must either both be None or both be provided.")
 
         if X[:,self.cat_feat_idxs].max() > np.iinfo(np.uint8).max:
             self.input_cat_dtype = "uint16"
@@ -394,6 +450,9 @@ class FasterKPrototypes(BaseClusterer):
             self.gemm = sgemm
             self.gemv = sgemv
 
+        # Validate init_Ccat
+        if (init_Ccat is None) != (init_Cnum is None):
+            raise ValueError("init_Ccat and init_Cnum must either both be None or both be provided.")
 
         if init_Ccat is not None:
             if not isinstance(init_Ccat, np.ndarray):
@@ -402,12 +461,14 @@ class FasterKPrototypes(BaseClusterer):
                 raise ValueError("init_Ccat must be a 2-dimensional array.")
             if init_Ccat.shape[1] != len(self.cat_feat_idxs):
                 raise ValueError("init_Ccat must have the same number of columns as the categorical features.")
-            if not np.issubdtype(init_Ccat.dtype, np.integer):
-                raise ValueError("init_Ccat must contain integer values.")
-            if np.any(init_Ccat < 0) or np.any(init_Ccat >= X[:, self.cat_feat_idxs].max() + 1):
+            if np.any(init_Ccat < 0) or np.any(init_Ccat > X[:, self.cat_feat_idxs].max()):
                 raise ValueError("init_Ccat contains invalid values for categorical features.")
             if init_Ccat.dtype != self.itype:
-                raise ValueError("init_Ccat must have the same dtype as X[:, self.cat_feat_idxs].")
+                raise ValueError(
+                    "The dtype of init_Ccat does not match the expected type derived from X[:, categorical]'s maximum value. "
+                    "If the maximum value of X[:, categorical] is 255(65535) or below, uint8(uint16) is expected."
+                    f"Found init_Ccat dtype: {init_Ccat.dtype}, expected: {self.itype}."
+                )
             
         # Validate init_Cnum
         if init_Cnum is not None:
@@ -417,11 +478,14 @@ class FasterKPrototypes(BaseClusterer):
                 raise ValueError("init_Cnum must be a 2-dimensional array.")
             if init_Cnum.shape[1] != len(self.num_feat_idxs):
                 raise ValueError("init_Cnum must have the same number of columns as the numerical features.")
-            if not np.issubdtype(init_Cnum.dtype, np.floating):
-                raise ValueError("init_Cnum must contain float values.")
             if init_Cnum.dtype != self.ftype:
-                raise ValueError("init_Cnum must have the same dtype as X[:, self.num_feat_idxs].")
-            
+                raise ValueError(
+                    "The dtype of init_Cnum does not match the expected type derived from the maximum value of X[:, numerical]. "
+                    "If the maximum value of X[:, numerical] is less than or equal to np.finfo(np.float32).max, float32 is expected; "
+                    "if it exceeds this threshold, float64 is expected. "
+                    f"Found init_Cnum dtype: {init_Cnum.dtype}, expected: {self.ftype}."
+                )           
+             
         # Check consistency of init_Ccat and init_Cnum with n_clusters
         if init_Ccat is not None and init_Cnum is not None:
             if init_Ccat.shape[0] != init_Cnum.shape[0]:
@@ -474,31 +538,23 @@ class FasterKPrototypes(BaseClusterer):
         if X.dtype not in allowed_dtypes:
             raise ValueError("X must have a dtype of uint8, uint16, float32, or float64.")
 
-        # Check if X's dtype matches the dtype used in training
-        if np.issubdtype(X.dtype, np.integer) and self.input_cat_dtype not in ["uint8", "uint16"]:
-            raise ValueError(
-                f"X contains integer values, but the model was trained with categorical data type {self.input_cat_dtype}."
-            )
-        if np.issubdtype(X.dtype, np.floating) and self.input_num_dtype not in ["float", "double"]:
-            raise ValueError(
-                f"X contains floating-point values, but the model was trained with numerical data type {self.input_num_dtype}."
-            )
-
         # Validate categorical features
-        if np.any(X[:, self.cat_feat_idxs] < 0):
-            raise ValueError("Categorical features in X must be non-negative.")
-        max_value = np.iinfo(np.uint16).max if self.input_cat_dtype == "uint16" else np.iinfo(np.uint8).max
-        if np.any(X[:, self.cat_feat_idxs] > max_value):
-            raise ValueError(
-                f"Categorical features in X must not exceed {max_value}. "
-                f"Current max value: {X[:, self.cat_feat_idxs].max()}."
-            )
+        if X.dtype in [np.float32, np.float64]:
+            if np.any(X[:, self.cat_feat_idxs] < 0):
+                raise ValueError("Categorical features in X must be non-negative.")
+            
+            max_value_i = np.iinfo(self.itype).max
+            if np.any(X[:, self.cat_feat_idxs] > max_value_i):
+                raise ValueError(
+                    f"Categorical features in X must not exceed {max_value_i}. "
+                    f"Current max value: {X[:, self.cat_feat_idxs].max()}."
+                )
 
-        # Check if numerical features are within a valid range
-        max_value = np.finfo(np.float32).max if self.input_num_dtype == "float" else np.finfo(np.float64).max
-        if np.any(np.abs(X[:, self.num_feat_idxs]) > max_value):
+        max_value_f = np.finfo(self.ftype).max
+        if np.any(np.abs(X[:, self.num_feat_idxs]) > max_value_f):
             raise ValueError(
-                f"Numerical features in X exceed the maximum allowed value for {self.input_num_dtype}."
+                f"Numerical features in X must not exceed {max_value_f}. "
+                f"Current max value: {X[:, self.num_feat_idxs].max()}."
             )
 
         # Check if X is in C order
@@ -529,17 +585,18 @@ class FasterKPrototypes(BaseClusterer):
     def __create_file_names(self):
         suffix = ""
         if (self.n_cat_cols >= 32) & (self.use_simd): suffix = "_SIMD"
-        self.fn_get_nearest_dist = f"get_nearest_{self.categorical_measure}_dist_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
+        self.fn_get_nearest_cat_dist = f"get_nearest_{self.categorical_measure}_dist_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
         self.fn_dist_mat = f"{self.categorical_measure}_dist_mat_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
         self.fn_dist_vec = f"{self.categorical_measure}_dist_vec_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
 
     def fit(self, X: np.ndarray, categorical: list, init_Ccat: np.ndarray = None, init_Cnum: np.ndarray = None):
+        np.random.seed(self.random_state)
         self.__is_train = True
         self.__validate_train_X(X, categorical, init_Ccat, init_Cnum)
         self.__select_common_funcs()
         self.__create_file_names()
 
-        self._generate_compile_load_get_nearest_dist()
+        self._generate_compile_load_get_nearest_cat_dist()
         self._generate_compile_load_dist_vec()
         self._generate_compile_load_dist_mat()
 
@@ -554,7 +611,8 @@ class FasterKPrototypes(BaseClusterer):
         self.Xnum_sqsum = np.sum(Xnum*Xnum, axis=1).reshape((-1, 1))
 
         self.max_vals = Xcat.max(axis=0)
-        self.offset = [0] + [self.max_vals.max()+1] * (self.n_cat_cols-1)
+        max_val = self.max_vals.max().astype(np.int32)
+        self.offset = [0] + [max_val+1] * (self.n_cat_cols-1)
         self.offset = np.cumsum(self.offset).astype(np.int32)
 
         best_cost = np.finfo(np.float64).max
@@ -562,7 +620,6 @@ class FasterKPrototypes(BaseClusterer):
         best_cluster_num = None
         fast_break = init_Ccat is not None
         N = len(X)
-        np.random.seed(self.random_state)
         for init in range(self.n_init):
             s = datetime.datetime.now()
             self.__select_initial_centroids(Xcat, Xnum, init_Ccat, init_Cnum)
