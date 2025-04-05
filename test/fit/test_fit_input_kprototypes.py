@@ -93,7 +93,7 @@ def test_kprototypes_invalid_input_type_fit():
     with pytest.raises(ValueError) as excinfo:
         model = FasterKPrototypes(**KMODES_VALID_HYPERPARAMETERS)
         model.fit(X, categorical=[1,3,5,7])
-    assert "X must be a numpy ndarray." in str(excinfo.value)
+    assert "Error: X must be a numpy array. Current input type:" in str(excinfo.value)
 
 def test_kprototypes_invalid_input_numpy_type_fit():
     """不適切なdtypeを持つndarrayに対するエラーを検証する"""
@@ -109,7 +109,7 @@ def test_kprototypes_invalid_input_ndim_fit():
     with pytest.raises(ValueError) as excinfo:
         model = FasterKPrototypes(**KMODES_VALID_HYPERPARAMETERS)
         model.fit(X, categorical=[1,3,5,7])
-    assert "X must be a 2-dimensional array." in str(excinfo.value)
+    assert "Error: X must be a 2D array. Current ndim: " in str(excinfo.value)
 
 def test_kprototypes_invalid_input_dtype_fit():
     """許可されていないdtypeに対してエラーが出るか検証する"""
