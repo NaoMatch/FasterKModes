@@ -66,7 +66,7 @@ REGISTER_ACCUMURATOR = {
     """,
 }
 
-def generate_get_nearest_dist_code(input_dtype, n_cols_simd, simd_size, fn_get_nearest_dist):
+def generate_get_nearest_cat_dist_code(input_dtype, n_cols_simd, simd_size, fn_get_nearest_cat_dist):
     # Set1
     _mm256_set1 = "_mm256_set1_epi8" if input_dtype == "uint8" else "_mm256_set1_epi16"
     _mm256_add = "_mm256_add_epi8" if input_dtype == "uint8" else "_mm256_add_epi16"
@@ -117,7 +117,7 @@ def generate_get_nearest_dist_code(input_dtype, n_cols_simd, simd_size, fn_get_n
 
     {reg_accm}
 
-    void get_nearest_dist(
+    void get_nearest_cat_dist(
         {input_dtype}_t *X, int32_t N, int32_t K,
         {input_dtype}_t *y,
         int32_t *d, int32_t n_jobs){{
@@ -151,7 +151,7 @@ def generate_get_nearest_dist_code(input_dtype, n_cols_simd, simd_size, fn_get_n
     }}
     """
 
-    with open(f"./src/{fn_get_nearest_dist}.c", "w") as f:
+    with open(f"./src/{fn_get_nearest_cat_dist}.c", "w") as f:
         f.write("#include <omp.h>\n")
         f.write("#include <stdio.h>\n")
         f.write("#include <stdlib.h>\n")
@@ -160,7 +160,7 @@ def generate_get_nearest_dist_code(input_dtype, n_cols_simd, simd_size, fn_get_n
         
         f.write(base_code_for_get_nearest_hamming_dist)
 
-def generate_naive_get_nearest_dist_code(input_dtype, n_cols, fn_get_nearest_dist):
+def generate_naive_get_nearest_cat_dist_code(input_dtype, n_cols, fn_get_nearest_cat_dist):
     ys = [f"y_{i:0=2}" for i in range(0, n_cols)]
     xs = [f"x_{i:0=2}" for i in range(0, n_cols)]
     cs = [f"comp_{i:0=2}" for i in range(0, n_cols)]
@@ -175,7 +175,7 @@ def generate_naive_get_nearest_dist_code(input_dtype, n_cols, fn_get_nearest_dis
     accm_op = "\n".join(accm_op[:-3])
 
     base_code = f"""
-    void get_nearest_dist(
+    void get_nearest_cat_dist(
         {input_dtype}_t *X, int32_t N, int32_t K,
         {input_dtype}_t *y,
         int32_t *d, int32_t n_jobs){{
@@ -193,7 +193,7 @@ def generate_naive_get_nearest_dist_code(input_dtype, n_cols, fn_get_nearest_dis
         }}
     }}
                 """
-    with open(f"./src/{fn_get_nearest_dist}.c", "w") as f:
+    with open(f"./src/{fn_get_nearest_cat_dist}.c", "w") as f:
         f.write("#include <omp.h>\n")
         f.write("#include <stdio.h>\n")
         f.write("#include <stdlib.h>\n")
@@ -235,7 +235,6 @@ def generate_dist_vec_code(input_dtype, n_cols_simd, simd_size, fn_dist_vec):
         load_and_comp += "\n        \n            "
         load_and_comp += "\n            ".join([load_x_vecs[-1], comp_vecs[-1]])
         
-
     # compとone の and積をとる
     result_vecs = [f"result_{i:0=3}"  for i in range(0, n_cols_simd, simd_size)]
     comp_and_ones = "\n            ".join(
@@ -253,7 +252,7 @@ def generate_dist_vec_code(input_dtype, n_cols_simd, simd_size, fn_dist_vec):
 
     {reg_accm}
 
-    void compute_dist_vec(
+    void compute_cat_dist_vec(
         {input_dtype}_t *X, int32_t N, int32_t K,
         {input_dtype}_t *y,
         int32_t *d, int32_t n_jobs){{
@@ -310,7 +309,7 @@ def generate_naive_dist_vec_code(input_dtype, n_cols, fn_dist_vec):
     accm_op = "\n".join(accm_op[:-3])
 
     base_code = f"""
-    void compute_dist_vec(
+    void compute_cat_dist_vec(
         {input_dtype}_t *X, int32_t N, int32_t K,
         {input_dtype}_t *y,
         int32_t *d, int32_t n_jobs){{
@@ -387,7 +386,7 @@ def generate_dist_mat_code(input_dtype, n_cols_simd, simd_size, fn_dist_mat):
 
     {reg_accm}
 
-    void compute_dist_mat(
+    void compute_cat_dist_mat(
         {input_dtype}_t *X, int32_t N, int32_t K,
         {input_dtype}_t *Y, int32_t M,
         int32_t *D, int32_t n_jobs){{
@@ -458,7 +457,7 @@ def generate_naive_dist_mat_code(input_dtype, n_cols, fn_hamm_dist_mat):
     accm_op = "\n            ".join(accm_op[:-2])
 
     base_code = f"""
-void compute_dist_mat(
+void compute_cat_dist_mat(
     {input_dtype}_t *X, int32_t N, int32_t K,
     {input_dtype}_t *Y, int32_t M,
     int32_t *D, int32_t n_jobs){{
