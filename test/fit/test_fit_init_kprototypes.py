@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../'
 
 import pytest
 from typing import Tuple
-from FasterKPrototypes import FasterKPrototypes
+from FasterKModes import FasterKPrototypes
 from valid_hyperparameters import custom_valid_init_kprototypes
 
 

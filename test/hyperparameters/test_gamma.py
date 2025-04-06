@@ -4,8 +4,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 import pytest
-from FasterKPrototypes import FasterKPrototypes
-from FasterKModes import FasterKModes
+from FasterKModes import FasterKPrototypes
 
 # FasterKPrototypes 用テスト
 def test_kprototypes_valid_gamma():

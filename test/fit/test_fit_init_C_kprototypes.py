@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 import pytest
-from FasterKPrototypes import FasterKPrototypes
+from FasterKModes import FasterKPrototypes
 from valid_hyperparameters import KMODES_VALID_HYPERPARAMETERS, custom_valid_init_kmodes
 
 def test_kprototypes_valid_fit():
