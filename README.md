@@ -39,7 +39,7 @@ print("KModes クラスタリング結果:", labels)
 ## FasterKPrototypes
 ```python
 import numpy as np
-from FasterKPrototypes import FasterKPrototypes
+from FasterKModes import FasterKPrototypes
 
 # データ作成
 N = 1100      # 総データ数
@@ -101,7 +101,7 @@ print("カスタム初期化 KModes 結果:", labels_custom)
 ## FasterKPrototypes: カスタム初期化・カスタム距離計算の例
 ```python
 import numpy as np
-from FasterKPrototypes import FasterKPrototypes
+from FasterKModes import FasterKPrototypes
 
 # カスタム初期化関数の例
 def custom_init(Xcat, Xnum, n_clusters):
