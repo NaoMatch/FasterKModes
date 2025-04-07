@@ -234,7 +234,7 @@ class BaseClusterer:
                         dist = self.categorical_measure(Xcat[i,:], C[j,:])
                         dist_mat[i,j] = dist
             self.compute_cat_dist_mat = compute_cat_dist_mat
-
+            return
         elif not os.path.exists(f"{self.to_dir}/{self.fn_dist_mat}.so"):
             if (self.n_cat_cols>=32) & (self.use_simd):
                 generate_dist_mat_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_mat)

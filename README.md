@@ -7,14 +7,17 @@
 
 # インストール方法
 ```bash
-git clone https://github.com/NaoMatch/FasterKModes.git
-cd FasterKModes
-pip install -r requirements.txt
+pip install FasterKModes
 ```
 
 # How to use
 
 ## FasterKModes
+```python
+# ライブラリ内で動的に生成したファイルの削除
+from FasterKModes import delete_all_generated_so
+delete_all_generated_so()
+```
 
 ```python
 import numpy as np
@@ -75,7 +78,7 @@ def custom_caetgorical_measure(x_cat, c_cat):
     # 変数名は固定
     # x_cat は np.array かつ, x_cat.ndim = 1
     # c_cat は np.array かつ, c_cat.ndim = 1
-    return np.sum(x_cal != c_cat)
+    return np.sum(x_cat != c_cat)
 
 # データ作成
 N = 1100
