@@ -4,10 +4,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 import pytest
-from FasterKPrototypes import FasterKPrototypes
-from FasterKModes import FasterKModes
+from FasterKModes import FasterKModes, FasterKPrototypes
 from valid_hyperparameters import custom_valid_args_categorical_measure, custom_invalid_args_categorical_measure
-from config import VALID_CATEGORICAL_MEASURES
+from FasterKModes.config import VALID_CATEGORICAL_MEASURES
 
 # FasterKModes 用テスト
 

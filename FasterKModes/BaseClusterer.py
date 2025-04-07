@@ -6,13 +6,14 @@ import datetime
 from typing import Tuple
 from numpy.typing import NDArray
 import inspect
+from appdirs import user_data_dir
 
-from src.generate_code import generate_get_nearest_cat_dist_code, generate_dist_vec_code, generate_dist_mat_code
-from src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_cat_dist_code, generate_naive_dist_vec_code
-from src.utils_kmodes import return_cat_argtypes
-from config import VALID_INIT_METHODS
-from config import VALID_CATEGORICAL_MEASURES
-from config import VALID_NUMERICAL_MEASURES
+from .src.generate_code import generate_get_nearest_cat_dist_code, generate_dist_vec_code, generate_dist_mat_code
+from .src.generate_code import generate_naive_dist_mat_code, generate_naive_get_nearest_cat_dist_code, generate_naive_dist_vec_code
+from .src.utils_kmodes import return_cat_argtypes
+from .config import VALID_INIT_METHODS
+from .config import VALID_CATEGORICAL_MEASURES
+from .config import VALID_NUMERICAL_MEASURES
 
 
 class BaseClusterer:
@@ -65,8 +66,11 @@ class BaseClusterer:
         self.max_tol = max_tol
         self.is_loaded = False
         
+        self.src_dir = os.path.dirname(__file__) + "/src"
+        self.to_dir  = user_data_dir("FasterKModes")
+        os.makedirs(self.to_dir, exist_ok=True)
         self._compile_lib(fn="common_funcs")
-        self.lib = ctypes.CDLL("./src/common_funcs.so")
+        self.lib = ctypes.CDLL(f"{self.to_dir}/common_funcs.so")
         self.is_fitted = False
 
     def __validate_hyper_parameters(
@@ -169,9 +173,8 @@ class BaseClusterer:
                 raise ValueError(f"max_tol must be a non-negative float, but got {max_tol} (type: {type(max_tol)}).")
             
     def _compile_lib(self, fn: str):
-        cmd = f"gcc -cpp -fPIC -fopenmp -march=native -shared ./src/{fn}.c -lm -o ./src/{fn}.so -O3 -Ofast"
-
-        if (not os.path.exists(f"{fn}.so")) | (self.recompile):
+        cmd = f"gcc -cpp -fPIC -fopenmp -march=native -shared {self.src_dir}/{fn}.c -lm -o {self.to_dir}/{fn}.so -O3 -Ofast"
+        if (not os.path.exists(f"{self.to_dir}/{fn}.so")) | (self.recompile):
             if self.print_log:
                 print(cmd)
             result = subprocess.run(cmd, shell=True,
@@ -192,13 +195,13 @@ class BaseClusterer:
                     dist_vec[i] = np.min([dist_vec[i], dist])
             self.get_nearest_cat_dist = get_nearest_cat_dist
             return
-        if not os.path.exists(self.fn_get_nearest_cat_dist):
+        if not os.path.exists(f"{self.to_dir}/{self.fn_get_nearest_cat_dist}.so"):
             if (self.n_cat_cols>=32) & (self.use_simd):
-                generate_get_nearest_cat_dist_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_get_nearest_cat_dist)
+                generate_get_nearest_cat_dist_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_get_nearest_cat_dist)
             else:
-                generate_naive_get_nearest_cat_dist_code(self.input_cat_dtype, self.n_cat_cols, self.fn_get_nearest_cat_dist)
+                generate_naive_get_nearest_cat_dist_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols, self.fn_get_nearest_cat_dist)
         self._compile_lib(fn=self.fn_get_nearest_cat_dist)
-        self.lib_get_nearest_cat_dist = ctypes.CDLL(f"./src/{self.fn_get_nearest_cat_dist}.so")
+        self.lib_get_nearest_cat_dist = ctypes.CDLL(f"{self.to_dir}/{self.fn_get_nearest_cat_dist}.so")
         self.lib_get_nearest_cat_dist.get_nearest_cat_dist.argtypes = self.arg_dist_vec
         self.get_nearest_cat_dist = self.lib_get_nearest_cat_dist.get_nearest_cat_dist
 
@@ -211,13 +214,13 @@ class BaseClusterer:
             self.compute_cat_dist_vec = compute_cat_dist_vec
             return
         
-        if not os.path.exists(self.fn_dist_vec):
+        if not os.path.exists(f"{self.to_dir}/{self.fn_dist_vec}.so"):
             if (self.n_cat_cols>=32) & (self.use_simd):
-                generate_dist_vec_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_vec)
+                generate_dist_vec_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_vec)
             else:
-                generate_naive_dist_vec_code(self.input_cat_dtype, self.n_cat_cols, self.fn_dist_vec)
+                generate_naive_dist_vec_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols, self.fn_dist_vec)
         self._compile_lib(fn=self.fn_dist_vec)
-        self.lib_dist_vec = ctypes.CDLL(f"./src/{self.fn_dist_vec}.so")
+        self.lib_dist_vec = ctypes.CDLL(f"{self.to_dir}/{self.fn_dist_vec}.so")
         self.lib_dist_vec.compute_cat_dist_vec.argtypes = self.arg_dist_vec
         self.compute_cat_dist_vec = self.lib_dist_vec.compute_cat_dist_vec
 
@@ -231,16 +234,16 @@ class BaseClusterer:
                         dist = self.categorical_measure(Xcat[i,:], C[j,:])
                         dist_mat[i,j] = dist
             self.compute_cat_dist_mat = compute_cat_dist_mat
-        else:
-            if not os.path.exists(self.fn_dist_mat):
-                if (self.n_cat_cols>=32) & (self.use_simd):
-                    generate_dist_mat_code(self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_mat)
-                else:
-                    generate_naive_dist_mat_code(self.input_cat_dtype, self.n_cat_cols, self.fn_dist_mat)
-            self._compile_lib(fn=self.fn_dist_mat)
-            self.lib_dist_mat = ctypes.CDLL(f"./src/{self.fn_dist_mat}.so")
-            self.lib_dist_mat.compute_cat_dist_mat.argtypes = self.arg_dist_mat
-            self.compute_cat_dist_mat = self.lib_dist_mat.compute_cat_dist_mat
+            return
+        elif not os.path.exists(f"{self.to_dir}/{self.fn_dist_mat}.so"):
+            if (self.n_cat_cols>=32) & (self.use_simd):
+                generate_dist_mat_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols_simd, self.simd_size, self.fn_dist_mat)
+            else:
+                generate_naive_dist_mat_code(self.src_dir, self.input_cat_dtype, self.n_cat_cols, self.fn_dist_mat)
+        self._compile_lib(fn=self.fn_dist_mat)
+        self.lib_dist_mat = ctypes.CDLL(f"{self.to_dir}/{self.fn_dist_mat}.so")
+        self.lib_dist_mat.compute_cat_dist_mat.argtypes = self.arg_dist_mat
+        self.compute_cat_dist_mat = self.lib_dist_mat.compute_cat_dist_mat
 
     def _compute_distance_vector(self, Xcat: np.ndarray, c: np.ndarray):
         N = len(Xcat)
@@ -258,6 +261,4 @@ class BaseClusterer:
 
         density_matrix = (count_matrix[0, :, :] / N).astype(np.float32)
         return density_matrix
-
-    # def _common_validate_train_X(self, X):
 
