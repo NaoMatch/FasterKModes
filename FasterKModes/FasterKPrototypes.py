@@ -147,7 +147,7 @@ class FasterKPrototypes(BaseClusterer):
             self.Cnum = init_Cnum.astype(self.ftype)
         elif self.init == "random":
             indices = N
-            shuffled_indices = np.random.permutation(indices)
+            shuffled_indices = self._rng.permutation(indices)
             centroid_indices = shuffled_indices[:self.n_clusters]
             self.Ccat = Xcat[centroid_indices,:].astype(self.itype)
             self.Cnum = Xnum[centroid_indices,:].astype(self.ftype)
@@ -163,7 +163,7 @@ class FasterKPrototypes(BaseClusterer):
             num_dist_vec = np.zeros(N, dtype=np.float32)
 
             # Random Selected Centroid
-            rnd_idx = np.random.randint(0, N)
+            rnd_idx = self._rng.randint(0, N)
             centroid_indices.append(rnd_idx)
             cat_centroid_vec = Xcat[rnd_idx,:]
             num_centroid_vec = Xnum[rnd_idx,:]
@@ -185,7 +185,7 @@ class FasterKPrototypes(BaseClusterer):
             for c in range(1, self.n_clusters):
                 min_dist_vec = (self.gamma*cat_dist_mat[:,0:c] + num_dist_mat[:,0:c]).min(axis=1)
                 weights = min_dist_vec / np.sum(min_dist_vec)
-                rnd_idx = np.random.choice(N, p=weights)
+                rnd_idx = self._rng.choice(N, p=weights)
                 centroid_indices.append(rnd_idx)
                 cat_centroid_vec = Xcat[rnd_idx,:]
                 num_centroid_vec = Xnum[rnd_idx,:]
@@ -211,7 +211,7 @@ class FasterKPrototypes(BaseClusterer):
             # ランダムに選択されたセントロイドを生成
             for k in range(self.n_cat_cols):
                 X_k = Xcat[:,k]
-                x_k = np.random.choice(X_k, size=self.n_clusters)
+                x_k = self._rng.choice(X_k, size=self.n_clusters)
                 self.Ccat[:,k] = x_k
 
             # セントロイドを修正
@@ -226,7 +226,7 @@ class FasterKPrototypes(BaseClusterer):
                         centroid_indices.append(rnk)
                         break
             self.Ccat = Xcat[centroid_indices,:].astype(self.itype)
-            self.Cnum = (np.random.randn(self.n_clusters, self.n_num_cols) * self.Xnum_std).astype(self.ftype)
+            self.Cnum = (self._rng.randn(self.n_clusters, self.n_num_cols) * self.Xnum_std).astype(self.ftype)
 
         elif self.init == "cao":
             centroid_indices = []
@@ -261,7 +261,7 @@ class FasterKPrototypes(BaseClusterer):
                 distance_matrix[:,c] = dist_vec
 
             self.Ccat = Xcat[centroid_indices,:].astype(self.itype)
-            self.Cnum = (np.random.randn(self.n_clusters, self.n_num_cols) * self.Xnum_std).astype(self.ftype)
+            self.Cnum = (self._rng.randn(self.n_clusters, self.n_num_cols) * self.Xnum_std).astype(self.ftype)
         elif callable(self.init):
             self.Ccat, self.Cnum = self.init(Xcat, Xnum, self.n_clusters)
             self.__check_custom_init_method_output(Xcat, Xnum)
@@ -329,7 +329,7 @@ class FasterKPrototypes(BaseClusterer):
             if is_exist[c_ind]:
                 self.Ccat[c_ind,:] = self.count_matrix[c_ind,:,:].argmax(axis=1)
             else: # Empty Cluster
-                self.Ccat[c_ind,:] = np.random.randint(0, max_val+1, self.n_cat_cols)
+                self.Ccat[c_ind,:] = self._rng.randint(0, max_val+1, self.n_cat_cols)
         e = datetime.datetime.now()
         time_cat = (e-s).total_seconds()
 
@@ -349,7 +349,7 @@ class FasterKPrototypes(BaseClusterer):
             if count>0:
                 self.Cnum[c_ind,:] = self.Cnum_[c_ind,:] / count
             else:
-                self.Cnum[c_ind,:] = np.random.randn(self.n_num_cols)
+                self.Cnum[c_ind,:] = self._rng.randn(self.n_num_cols)
 
         self.Cnum_sqsum = np.sum(self.Cnum*self.Cnum, axis=1).reshape((1, -1))
         e = datetime.datetime.now()
@@ -590,7 +590,8 @@ class FasterKPrototypes(BaseClusterer):
         self.fn_dist_vec = f"{self.categorical_measure}_dist_vec_{self.input_cat_dtype}_{self.n_cat_cols}{suffix}"
 
     def fit(self, X: np.ndarray, categorical: list, init_Ccat: np.ndarray = None, init_Cnum: np.ndarray = None):
-        np.random.seed(self.random_state)
+        # Restart each fit without changing NumPy's global random state.
+        self._rng = np.random.RandomState(self.random_state)
         self.__is_train = True
         self.__validate_train_X(X, categorical, init_Ccat, init_Cnum)
         self.__select_common_funcs()
@@ -666,7 +667,6 @@ class FasterKPrototypes(BaseClusterer):
 
         self.Ccat = best_cluster_cat.astype(self.itype)
         self.Cnum = best_cluster_num.astype(self.ftype)
-        np.random.seed(None)
         self.__is_train = False
         self.is_fitted = True
 
