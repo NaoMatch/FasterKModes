@@ -114,7 +114,7 @@ class FasterKModes(BaseClusterer):
             self.C = init_C
         elif self.init == "random":
             indices = list(range(N))
-            shuffled_indices = np.random.permutation(indices)
+            shuffled_indices = self._rng.permutation(indices)
             centroid_indices = shuffled_indices[:self.n_clusters]
             self.C = Xcat[centroid_indices,:]
         elif self.init == "k-means++":
@@ -124,7 +124,7 @@ class FasterKModes(BaseClusterer):
             dist_vec = np.array([np.iinfo(np.int32).max]*N, dtype=np.int32)
 
             # Random Selected Centroid
-            rnd_idx = np.random.randint(0, len(Xcat))
+            rnd_idx = self._rng.randint(0, len(Xcat))
             centroid_indices.append(rnd_idx)
             centroid_vec = Xcat[rnd_idx,:]
             self.get_nearest_cat_dist(Xcat, N, self.n_cat_cols, centroid_vec, dist_vec, self.n_jobs)
@@ -132,7 +132,7 @@ class FasterKModes(BaseClusterer):
             # Select 2nd - N-th Centroids
             for c in range(1, self.n_clusters):
                 weights = dist_vec / np.sum(dist_vec)
-                rnd_idx = np.random.choice(N, p=weights)
+                rnd_idx = self._rng.choice(N, p=weights)
                 centroid_indices.append(rnd_idx)
                 centroid_vec = Xcat[rnd_idx,:]
                 self.get_nearest_cat_dist(Xcat, N, self.n_cat_cols, centroid_vec, dist_vec, self.n_jobs)
@@ -143,7 +143,7 @@ class FasterKModes(BaseClusterer):
             # ランダムに選択されたセントロイドを生成
             for k in range(self.n_cat_cols):
                 X_k = Xcat[:,k]
-                x_k = np.random.choice(X_k, size=self.n_clusters)
+                x_k = self._rng.choice(X_k, size=self.n_clusters)
                 self.C[:,k] = x_k
 
             # セントロイドを修正
@@ -231,7 +231,7 @@ class FasterKModes(BaseClusterer):
             if is_exist[c_ind]:
                 self.C[c_ind,:] = self.count_matrix[c_ind,:,:].argmax(axis=1)
             else: # Empty Cluster
-                self.C[c_ind,:] = np.random.randint(0, max_val+1, self.n_cat_cols)
+                self.C[c_ind,:] = self._rng.randint(0, max_val+1, self.n_cat_cols)
 
     def __validate_train_X(self, X: np.ndarray, init_C: np.ndarray):
         if (init_C is not None) and callable(self.init):
@@ -367,7 +367,8 @@ class FasterKModes(BaseClusterer):
             self.sample_density = self.lib.sample_density_uint16
 
     def fit(self, X: np.ndarray, init_C: np.ndarray =None):
-        np.random.seed(self.random_state)
+        # Restart each fit without changing NumPy's global random state.
+        self._rng = np.random.RandomState(self.random_state)
         self.__validate_train_X(X, init_C)
         self.__select_common_funcs()
         self.__create_file_names()
@@ -430,7 +431,6 @@ class FasterKModes(BaseClusterer):
             if fast_break: break
 
         self.C = best_cluster
-        np.random.seed(None)
         self.is_fitted = True
 
     def __compute_score_in_train(self, Xcat):
