@@ -8,8 +8,10 @@ from FasterKModes import FasterKModes, FasterKPrototypes
 
 # FasterKModes 用テスト
 
-def test_kmodes_valid_n_jobs():
-    """n_jobs に正の整数を指定した場合に正常動作するかをテストする。"""
+@pytest.mark.parametrize("cpu_count", [2, 16, None])
+def test_kmodes_valid_n_jobs(monkeypatch, cpu_count):
+    """明示した n_jobs は CPU 数にかかわらず保持する。"""
+    monkeypatch.setattr(os, "cpu_count", lambda: cpu_count)
     model = FasterKModes(
             n_jobs=10, # 正常な型と範囲
          )
@@ -34,8 +36,10 @@ def test_kmodes_invalid_type_n_jobs():
 
 # FasterKPrototypes 用テスト
 
-def test_kprototypes_valid_n_jobs():
-    """n_jobs に正の整数を指定した場合に正常動作するかをテストする。"""
+@pytest.mark.parametrize("cpu_count", [2, 16, None])
+def test_kprototypes_valid_n_jobs(monkeypatch, cpu_count):
+    """明示した n_jobs は CPU 数にかかわらず保持する。"""
+    monkeypatch.setattr(os, "cpu_count", lambda: cpu_count)
     model = FasterKPrototypes(
             n_jobs=10, # 正常な型と範囲
          )
@@ -56,3 +60,11 @@ def test_kprototypes_invalid_type_n_jobs():
             n_jobs="10",  # 型があっていない
         )
     assert "n_jobs" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("model_class", [FasterKModes, FasterKPrototypes])
+@pytest.mark.parametrize("cpu_count", [1, 4])
+def test_none_n_jobs_uses_cpu_count(monkeypatch, model_class, cpu_count):
+    """n_jobs=None は CPU 数を使用する。"""
+    monkeypatch.setattr(os, "cpu_count", lambda: cpu_count)
+    assert model_class(n_jobs=None).n_jobs == cpu_count
