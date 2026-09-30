@@ -12,6 +12,8 @@ pip install FasterKModes
 
 # How to use
 
+両クラスの `n_jobs` は並列処理で要求するスレッド数です。`None`（既定）は `os.cpu_count()` を使用し、明示した正の整数は CPU 数で制限せず、そのまま保持します。`0`・負数・整数以外（`None` を除く）は無効です。
+
 ## FasterKModes
 ```python
 # ライブラリ内で動的に生成したファイルの削除

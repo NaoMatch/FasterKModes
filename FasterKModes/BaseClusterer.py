@@ -140,14 +140,11 @@ class BaseClusterer:
         else:
             raise ValueError(f"numerical_measure must be a string from {VALID_NUMERICAL_MEASURES} or a callable function, but got {numerical_measure} (type: {type(numerical_measure)}).")
         
-        # n_jobs: None または 1以上の整数
-        if n_jobs is None:
-            n_jobs = os.cpu_count()
-        elif isinstance(n_jobs, int):
+        # n_jobs: None または 1以上の整数（CPU 数による上限なし）
+        if isinstance(n_jobs, int):
             if n_jobs < 1:
                 raise ValueError(f"n_jobs must be an integer >= 1 or None, but got {n_jobs}.")
-            n_jobs = min(n_jobs, os.cpu_count())
-        else:
+        elif n_jobs is not None:
             raise ValueError(f"n_jobs must be an integer or None, but got {n_jobs} (type: {type(n_jobs)}).")
         
         # print_log: Boolean
